@@ -1,0 +1,190 @@
+#!/usr/bin/env node
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function generateMetrics(baseTimestamp, serverIdx, hourOffset) {
+  const baseHour = (new Date(baseTimestamp).getHours() + hourOffset / 60) % 24;
+  
+  const timeFactor = 1 - 0.3 * Math.cos((baseHour - 9) * Math.PI / 12);
+  
+  const baselines = [
+    { cpu: 35, ram: 45, ping: 80, load: 1.2 },
+    { cpu: 25, ram: 35, ping: 35, load: 0.8 }
+  ];
+  
+  const baseline = baselines[serverIdx];
+  const cpuNoise = (Math.random() - 0.5) * 20;
+  const ramNoise = (Math.random() - 0.5) * 10;
+  const pingNoise = (Math.random() - 0.5) * 15;
+  
+  const cpu = Math.max(5, Math.min(95, baseline.cpu * timeFactor + cpuNoise));
+  const ram = Math.max(10, Math.min(90, baseline.ram * timeFactor + ramNoise));
+  const ramTotal = serverIdx === 0 ? 32768 : 16384;
+  const ramUsed = ramTotal * (ram / 100);
+  
+  return {
+    cpu: cpu.toFixed(2),
+    ram: ram.toFixed(2),
+    ram_total: ramTotal.toString(),
+    ram_used: Math.floor(ramUsed).toString(),
+    swap_total: '8192',
+    swap_used: Math.floor(Math.random() * 512).toString(),
+    disk: (45 + (Math.random() - 0.5) * 5).toFixed(0),
+    disk_total: (serverIdx === 0 ? 200 : 100).toString(),
+    disk_used: '90',
+    load: `${(baseline.load + (Math.random() - 0.5) * 0.8).toFixed(2)} ${(baseline.load + (Math.random() - 0.5) * 0.6).toFixed(2)} ${(baseline.load + (Math.random() - 0.5) * 0.4).toFixed(2)}`,
+    net_rx: Math.floor(Math.random() * 10000 + 5000).toString(),
+    net_tx: Math.floor(Math.random() * 5000 + 2500).toString(),
+    net_in_speed: Math.floor(Math.random() * 80 + 20).toString(),
+    net_out_speed: Math.floor(Math.random() * 40 + 10).toString(),
+    processes: (100 + Math.floor(Math.random() * 50)).toString(),
+    tcp_conn: (50 + Math.floor(Math.random() * 100)).toString(),
+    udp_conn: (10 + Math.floor(Math.random() * 30)).toString(),
+    ping_ct: Math.round(Math.max(10, baseline.ping * 1.2 + pingNoise)).toString(),
+    ping_cu: Math.round(Math.max(10, baseline.ping + pingNoise)).toString(),
+    ping_cm: Math.round(Math.max(10, baseline.ping * 1.1 + pingNoise)).toString(),
+    ping_bd: Math.round(Math.max(10, baseline.ping * 1.5 + pingNoise)).toString(),
+    ip_v4: '1',
+    ip_v6: serverIdx === 0 ? '1' : '0',
+    cpu_cores: serverIdx === 0 ? '4' : '2',
+    cpu_info: serverIdx === 0 ? 'Intel Xeon E5-2680 v4' : 'AMD EPYC 7742',
+    arch: 'x86_64',
+    os: serverIdx === 0 ? 'Ubuntu 22.04 LTS' : 'Debian 12',
+    country: serverIdx === 0 ? 'US' : 'JP',
+    boot_time: (Date.now() - (serverIdx === 0 ? 86400000 * 600 : 86400000 * 15)).toString()
+  };
+}
+
+const now = Date.now();
+const hoursBack = 72;
+
+const servers = [
+  {
+    id: '550e8400-e29b-41d4-a716-446655440001',
+    name: 'US-East-Fast',
+    server_group: 'Production',
+    price: '$15/mo',
+    expire_date: '2026-12-31',
+    bandwidth: '1Gbps',
+    traffic_limit: '2TB',
+    is_hidden: '0',
+    sort_order: 0
+  },
+  {
+    id: '550e8400-e29b-41d4-a716-446655440002',
+    name: 'JP-Tokyo-Stable',
+    server_group: 'Production',
+    price: '$10/mo',
+    expire_date: '2026-06-30',
+    bandwidth: '500Mbps',
+    traffic_limit: '1TB',
+    is_hidden: '0',
+    sort_order: 1
+  }
+];
+
+let sql = `-- CF Server Monitor 模拟数据
+-- 生成时间: ${new Date().toISOString()}
+
+-- 清空现有数据（注意顺序：先删子表，再删主表）
+DELETE FROM metrics_history;
+DELETE FROM servers;
+DELETE FROM settings;
+
+-- 插入系统配置
+`;
+
+const appearanceOptions = {
+  site_title: 'Cloudflare Server Monitor',
+  admin_title: 'Admin Panel',
+  custom_bg: '',
+  custom_head: '<meta content="test">',
+  custom_script: 'console.log("Hello, World!");'
+};
+
+const siteOptions = {
+  is_public: 'false',
+  show_price: 'true',
+  show_expire: 'true',
+  show_bw: 'true',
+  show_tf: 'true',
+  tg_notify: 'false',
+  tg_bot_token: '',
+  tg_chat_id: ''
+};
+
+sql += `INSERT INTO settings (key, value) VALUES ('appearance_options', '${JSON.stringify(appearanceOptions)}');\n`;
+sql += `INSERT INTO settings (key, value) VALUES ('site_options', '${JSON.stringify(siteOptions)}');\n`;
+sql += `INSERT INTO settings (key, value) VALUES ('last_cleanup', '${now.toString()}');\n`;
+
+sql += `\n-- 插入服务器数据\n`;
+
+const serverLatestMetrics = {};
+
+for (const server of servers) {
+  sql += `INSERT INTO servers (
+    id, name, server_group, price, expire_date, bandwidth, traffic_limit, is_hidden, sort_order
+  ) VALUES (
+    '${server.id}', '${server.name}', '${server.server_group}', '${server.price}', 
+    '${server.expire_date}', '${server.bandwidth}', '${server.traffic_limit}', 
+    '${server.is_hidden}', ${server.sort_order}
+  );\n`;
+}
+
+sql += `\n-- 生成历史指标数据\n`;
+
+const reportInterval = 60;
+
+for (let s = 0; s < servers.length; s++) {
+  const server = servers[s];
+  const startTime = now - hoursBack * 60 * 60 * 1000;
+  let latestTs = 0;
+  let latestMetrics = null;
+  
+  for (let ts = startTime; ts <= now; ts += reportInterval * 1000) {
+    const hourOffset = (now - ts) / (60 * 60 * 1000);
+    const metrics = generateMetrics(now, s, hourOffset);
+    
+    sql += `INSERT INTO metrics_history (
+      server_id, timestamp, cpu, ram, disk, load_avg,
+      net_in_speed, net_out_speed, net_rx, net_tx,
+      processes, tcp_conn, udp_conn,
+      ping_ct, ping_cu, ping_cm, ping_bd,
+      ram_total, ram_used, swap_total, swap_used,
+      disk_total, disk_used,
+      cpu_cores, cpu_info, arch, os, country, ip_v4, ip_v6, boot_time
+    ) VALUES (
+      '${server.id}', ${ts}, 
+      ${parseFloat(metrics.cpu)}, ${parseFloat(metrics.ram)}, ${parseFloat(metrics.disk)}, '${metrics.load}',
+      ${parseFloat(metrics.net_in_speed)}, ${parseFloat(metrics.net_out_speed)},
+      ${parseFloat(metrics.net_rx)}, ${parseFloat(metrics.net_tx)},
+      ${parseInt(metrics.processes)}, ${parseInt(metrics.tcp_conn)}, ${parseInt(metrics.udp_conn)},
+      ${parseInt(metrics.ping_ct)}, ${parseInt(metrics.ping_cu)}, ${parseInt(metrics.ping_cm)}, ${parseInt(metrics.ping_bd)},
+      ${parseFloat(metrics.ram_total)}, ${parseFloat(metrics.ram_used)},
+      ${parseFloat(metrics.swap_total)}, ${parseFloat(metrics.swap_used)},
+      ${parseFloat(metrics.disk_total)}, ${parseFloat(metrics.disk_used)},
+      ${parseInt(metrics.cpu_cores)}, '${metrics.cpu_info}', '${metrics.arch}', '${metrics.os}', '${metrics.country}', '${metrics.ip_v4}', '${metrics.ip_v6}', '${metrics.boot_time}'
+    );\n`;
+    
+    if (ts > latestTs) {
+      latestTs = ts;
+      latestMetrics = metrics;
+    }
+  }
+  
+  serverLatestMetrics[server.id] = { ts: latestTs, metrics: latestMetrics };
+}
+
+const outputPath = path.join(__dirname, 'mock-data.sql');
+fs.writeFileSync(outputPath, sql);
+
+console.log('✅ SQL 文件生成成功:', outputPath);
+console.log('\n📝 使用说明:');
+console.log('  1. 确保你有 wrangler.toml 配置好 D1 数据库');
+console.log('  2. 创建本地 D1 数据库: wrangler d1 create server-monitor-db --local');
+console.log('  3. 初始化数据库结构（如果还没）: 访问一次 http://localhost:8787');
+console.log('  4. 或者直接执行 SQL: wrangler d1 execute server-monitor-db --local --file=test/mock-data.sql');
+console.log('  5. 然后运行: npm run dev');
